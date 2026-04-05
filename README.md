@@ -15,23 +15,23 @@ This is a faithful port of [libsmacker](https://libsmacker.sourceforge.net/) 1.2
 ## Usage
 
 ```rust
-use smk::{Smk, SmkFrame};
+use smk::{Smk, FrameStatus};
 
 let mut s = Smk::open_file("video.smk", true)?;
 
-let info = s.info_all();
+let info = s.info();
 let video = s.info_video();
 
 s.enable_all(0xFF); // enable video + all audio tracks
 
 let mut status = s.first_frame()?;
 loop {
-    let pixels = s.video_frame();   // &[u8], w*h indexed pixels
+    let pixels = s.video_data();   // &[u8], w*h indexed pixels
     let palette = s.palette();      // &[[u8; 3]; 256], RGB
 
     // do something with the frame...
 
-    if status == SmkFrame::Done || status == SmkFrame::Last {
+    if status == FrameStatus::Done || status == FrameStatus::Last {
         break;
     }
     status = s.next_frame()?;

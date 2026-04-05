@@ -11,7 +11,7 @@ use crate::video::{Video, YScaleMode};
 
 /// Frame-advance return status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SmkFrame {
+pub enum FrameStatus {
     Done,
     More,
     Last,
@@ -109,7 +109,7 @@ impl Smk {
         Self::open_generic(&mut cursor, true)
     }
 
-    pub fn info_all(&self) -> SmkInfo {
+    pub fn info(&self) -> SmkInfo {
         SmkInfo {
             current_frame: self.cur_frame,
             frame_count: self.frame_count,
@@ -164,32 +164,30 @@ impl Smk {
         &self.video.palette
     }
 
-    pub fn video_frame(&self) -> &[u8] {
+    pub fn video_data(&self) -> &[u8] {
         &self.video.frame
     }
 
     pub fn audio_data(&self, track: u8) -> Option<&[u8]> {
-        self.audio.get(track as usize).map(|t| t.buffer.as_slice())
-    }
-
-    pub fn audio_size(&self, track: u8) -> Option<u32> {
-        self.audio.get(track as usize).map(|t| t.buffer_size)
+        self.audio
+            .get(track as usize)
+            .map(|t| &t.buffer[..t.buffer_size as usize])
     }
 
     /// Rewind to the first frame and decode it.
-    pub fn first_frame(&mut self) -> Result<SmkFrame> {
+    pub fn first_frame(&mut self) -> Result<FrameStatus> {
         self.cur_frame = 0;
         self.render_frame()?;
 
         if self.frame_count == 1 {
-            Ok(SmkFrame::Last)
+            Ok(FrameStatus::Last)
         } else {
-            Ok(SmkFrame::More)
+            Ok(FrameStatus::More)
         }
     }
 
     /// Advance to the next frame and decode it.
-    pub fn next_frame(&mut self) -> Result<SmkFrame> {
+    pub fn next_frame(&mut self) -> Result<FrameStatus> {
         let total = self.frame_count + u32::from(self.ring_frame);
 
         if self.cur_frame + 1 < total {
@@ -197,9 +195,9 @@ impl Smk {
             self.render_frame()?;
 
             if self.cur_frame + 1 == total {
-                Ok(SmkFrame::Last)
+                Ok(FrameStatus::Last)
             } else {
-                Ok(SmkFrame::More)
+                Ok(FrameStatus::More)
             }
         } else if self.ring_frame {
             // Loop: jump back to frame 1 (frame 0 is the setup frame).
@@ -207,12 +205,12 @@ impl Smk {
             self.render_frame()?;
 
             if self.cur_frame + 1 == total {
-                Ok(SmkFrame::Last)
+                Ok(FrameStatus::Last)
             } else {
-                Ok(SmkFrame::More)
+                Ok(FrameStatus::More)
             }
         } else {
-            Ok(SmkFrame::Done)
+            Ok(FrameStatus::Done)
         }
     }
 
@@ -498,7 +496,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let s = Smk::open_memory(&data).unwrap();
 
-        let info = s.info_all();
+        let info = s.info();
         eprintln!(
             "frames: {}, cur: {}, usf: {}",
             info.frame_count, info.current_frame, info.microseconds_per_frame
@@ -540,7 +538,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let mut s = Smk::open_memory(&data).unwrap();
 
-        let info = s.info_all();
+        let info = s.info();
         eprintln!("decoding {} frames...", info.frame_count);
 
         let mut status = s.first_frame().unwrap();
@@ -550,10 +548,10 @@ mod tests {
         let mut total_nonzero = 0usize;
 
         loop {
-            let frame = s.video_frame();
+            let frame = s.video_data();
             total_nonzero += frame.iter().filter(|&&b| b != 0).count();
 
-            if status == SmkFrame::Done || status == SmkFrame::Last {
+            if status == FrameStatus::Done || status == FrameStatus::Last {
                 break;
             }
             status = s.next_frame().unwrap();
@@ -602,7 +600,7 @@ mod tests {
     fn info_accessors() {
         let smk_data = build_minimal_smk(5, 320, 200, false);
         let s = Smk::open_memory(&smk_data).unwrap();
-        let info = s.info_all();
+        let info = s.info();
         assert_eq!(info.current_frame, 0);
         assert_eq!(info.frame_count, 5);
         assert!(info.microseconds_per_frame > 0.0);
@@ -617,20 +615,20 @@ mod tests {
     fn first_single_frame() {
         let smk_data = build_minimal_smk(1, 8, 8, false);
         let mut s = Smk::open_memory(&smk_data).unwrap();
-        assert_eq!(s.first_frame().unwrap(), SmkFrame::Last);
+        assert_eq!(s.first_frame().unwrap(), FrameStatus::Last);
     }
 
     #[test]
     fn first_next_multi_frame() {
         let smk_data = build_minimal_smk(3, 8, 8, false);
         let mut s = Smk::open_memory(&smk_data).unwrap();
-        assert_eq!(s.first_frame().unwrap(), SmkFrame::More);
+        assert_eq!(s.first_frame().unwrap(), FrameStatus::More);
         assert_eq!(s.cur_frame, 0);
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::More);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::More);
         assert_eq!(s.cur_frame, 1);
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::Last);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::Last);
         assert_eq!(s.cur_frame, 2);
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::Done);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::Done);
     }
 
     #[test]
@@ -638,11 +636,11 @@ mod tests {
         let smk_data = build_minimal_smk(2, 8, 8, true);
         let mut s = Smk::open_memory(&smk_data).unwrap();
         // total_frames = 3 (2 + ring)
-        assert_eq!(s.first_frame().unwrap(), SmkFrame::More);
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::More);
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::Last);
+        assert_eq!(s.first_frame().unwrap(), FrameStatus::More);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::More);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::Last);
         // Now next_frame() should loop back to frame 1.
-        assert_eq!(s.next_frame().unwrap(), SmkFrame::More);
+        assert_eq!(s.next_frame().unwrap(), FrameStatus::More);
         assert_eq!(s.cur_frame, 1);
     }
 

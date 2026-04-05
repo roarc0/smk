@@ -4,7 +4,7 @@
 //!
 //! Defaults: input = "testdata/test.smk", output_dir = "testdata"
 
-use smk::{Smk, SmkFrame};
+use smk::{FrameStatus, Smk};
 use std::fs;
 use std::io::{Seek, Write};
 use std::path::Path;
@@ -27,7 +27,7 @@ fn main() {
     let data = fs::read(input).unwrap();
     let mut s = Smk::open_memory(&data).unwrap();
 
-    let smk_info = s.info_all();
+    let smk_info = s.info();
     let video = s.info_video();
     let info = s.info_audio();
     let fps = 1_000_000.0 / smk_info.microseconds_per_frame;
@@ -61,27 +61,27 @@ fn main() {
     loop {
         // Store palette and indexed frame for AVI + BMP.
         palettes.push(*s.palette());
-        frames.push(s.video_frame().to_vec());
+        frames.push(s.video_data().to_vec());
 
         // Save every 10th frame as BMP (+ first and last).
-        if frame_idx % 10 == 0 || status == SmkFrame::Last {
+        if frame_idx % 10 == 0 || status == FrameStatus::Last {
             let path = format!("{outdir}/frame_{frame_idx:04}.bmp");
-            write_bmp(&path, w, h, s.palette(), s.video_frame());
+            write_bmp(&path, w, h, s.palette(), s.video_data());
             println!("Wrote {path}");
         }
 
         // Accumulate audio.
         for track in 0u8..7 {
             if info.track_mask & (1 << track) != 0 {
-                let size = s.audio_size(track).unwrap_or(0) as usize;
-                if size > 0 {
-                    let adata = s.audio_data(track).unwrap();
-                    audio_bufs[track as usize].extend_from_slice(&adata[..size]);
+                if let Some(adata) = s.audio_data(track) {
+                    if !adata.is_empty() {
+                        audio_bufs[track as usize].extend_from_slice(adata);
+                    }
                 }
             }
         }
 
-        if status == SmkFrame::Done || status == SmkFrame::Last {
+        if status == FrameStatus::Done || status == FrameStatus::Last {
             break;
         }
         status = s.next_frame().unwrap();

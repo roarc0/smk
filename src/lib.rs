@@ -7,5 +7,5 @@ mod video;
 
 pub use audio::AudioInfo;
 pub use error::{Result, SmkError};
-pub use smk::{Smk, SmkFrame, SmkInfo, VideoInfo};
+pub use smk::{FrameStatus, Smk, SmkInfo, VideoInfo};
 pub use video::YScaleMode;

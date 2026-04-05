@@ -131,8 +131,7 @@ impl AudioTrack {
                 let delta = i16::from_le_bytes([delta_lo, delta_hi]);
                 let prev_off = (j - self.channels as usize) * 2;
                 let prev = i16::from_le_bytes([buf[prev_off], buf[prev_off + 1]]);
-                buf[j * 2..j * 2 + 2]
-                    .copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
+                buf[j * 2..j * 2 + 2].copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
                 j += 1;
                 k += 2;
 
@@ -143,8 +142,7 @@ impl AudioTrack {
                     let delta = i16::from_le_bytes([delta_lo, delta_hi]);
                     let prev_off = (j - 2) * 2;
                     let prev = i16::from_le_bytes([buf[prev_off], buf[prev_off + 1]]);
-                    buf[j * 2..j * 2 + 2]
-                        .copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
+                    buf[j * 2..j * 2 + 2].copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
                     j += 1;
                     k += 2;
                 }
