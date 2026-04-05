@@ -1,0 +1,19 @@
+[package]
+name = "smk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A pure Rust library for decoding Smacker Video (.smk) files"
+license = "LGPL-2.1-or-later"
+authors = ["Alessandro Rosetti <alessandro.rosetti@gmail.com>"]
+repository = "https://github.com/roarc0/smk"
+homepage = "https://github.com/roarc0/smk"
+documentation = "https://docs.rs/smk"
+readme = "README.md"
+keywords = ["smacker", "video", "decoder", "multimedia", "smk"]
+categories = ["multimedia::video", "parser-implementations"]
+exclude = ["testdata/", "examples/"]
+
+[[example]]
+name = "extract"
+path = "examples/extract.rs"
