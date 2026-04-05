@@ -110,7 +110,7 @@ impl AudioTrack {
                 // Right channel initial sample (stored first in bitstream).
                 let hi = bs.read_byte()?;
                 let lo = bs.read_byte()?;
-                write_i16(buf, 1, i16::from_le_bytes([lo, hi]));
+                buf[2..4].copy_from_slice(&i16::from_le_bytes([lo, hi]).to_le_bytes());
                 j = 2;
                 k = 4;
             } else {
@@ -121,7 +121,7 @@ impl AudioTrack {
             // Left/mono initial sample.
             let hi = bs.read_byte()?;
             let lo = bs.read_byte()?;
-            write_i16(buf, 0, i16::from_le_bytes([lo, hi]));
+            buf[0..2].copy_from_slice(&i16::from_le_bytes([lo, hi]).to_le_bytes());
 
             // Decode loop.
             while k < buf_size {
@@ -129,8 +129,10 @@ impl AudioTrack {
                 let delta_lo = tree0.lookup(&mut bs)?;
                 let delta_hi = tree1.as_ref().unwrap().lookup(&mut bs)?;
                 let delta = i16::from_le_bytes([delta_lo, delta_hi]);
-                let prev = read_i16(buf, j - self.channels as usize);
-                write_i16(buf, j, prev.wrapping_add(delta));
+                let prev_off = (j - self.channels as usize) * 2;
+                let prev = i16::from_le_bytes([buf[prev_off], buf[prev_off + 1]]);
+                buf[j * 2..j * 2 + 2]
+                    .copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
                 j += 1;
                 k += 2;
 
@@ -139,8 +141,10 @@ impl AudioTrack {
                     let delta_lo = tree2.as_ref().unwrap().lookup(&mut bs)?;
                     let delta_hi = tree3.as_ref().unwrap().lookup(&mut bs)?;
                     let delta = i16::from_le_bytes([delta_lo, delta_hi]);
-                    let prev = read_i16(buf, j - 2);
-                    write_i16(buf, j, prev.wrapping_add(delta));
+                    let prev_off = (j - 2) * 2;
+                    let prev = i16::from_le_bytes([buf[prev_off], buf[prev_off + 1]]);
+                    buf[j * 2..j * 2 + 2]
+                        .copy_from_slice(&prev.wrapping_add(delta).to_le_bytes());
                     j += 1;
                     k += 2;
                 }
@@ -182,20 +186,6 @@ impl AudioTrack {
 
         Ok(())
     }
-}
-
-/// Read an i16 sample from byte buffer at sample index `i`.
-fn read_i16(buf: &[u8], i: usize) -> i16 {
-    let off = i * 2;
-    i16::from_le_bytes([buf[off], buf[off + 1]])
-}
-
-/// Write an i16 sample to byte buffer at sample index `i`.
-fn write_i16(buf: &mut [u8], i: usize, val: i16) {
-    let off = i * 2;
-    let bytes = val.to_le_bytes();
-    buf[off] = bytes[0];
-    buf[off + 1] = bytes[1];
 }
 
 /// Public return type for audio track information.
