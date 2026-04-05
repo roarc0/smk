@@ -28,7 +28,7 @@ impl Huff8 {
     pub fn build(bs: &mut BitStream) -> Result<Self> {
         let mut h = Huff8 { tree: Vec::new() };
 
-        if bs.read_1()? {
+        if bs.read_bit()? {
             h.build_rec(bs)?;
         } else {
             // No tree present — single leaf with value 0.
@@ -36,7 +36,7 @@ impl Huff8 {
         }
 
         // Trees are terminated by a false bit.
-        if bs.read_1()? {
+        if bs.read_bit()? {
             return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
         }
 
@@ -49,7 +49,7 @@ impl Huff8 {
             return Err(SmkError::TreeBuildFailed("huff8 tree size exceeded"));
         }
 
-        if bs.read_1()? {
+        if bs.read_bit()? {
             // Branch node: reserve a slot, build left subtree, record right
             // child index, then build right subtree.
             let slot = self.tree.len();
@@ -63,7 +63,7 @@ impl Huff8 {
             self.build_rec(bs)?;
         } else {
             // Leaf node: read the 8-bit value.
-            let value = bs.read_8()?;
+            let value = bs.read_byte()?;
             self.tree.push(u16::from(value));
         }
 
@@ -76,7 +76,7 @@ impl Huff8 {
         let mut index = 0usize;
 
         while self.tree[index] & HUFF8_BRANCH != 0 {
-            if bs.read_1()? {
+            if bs.read_bit()? {
                 // Right branch: jump to the stored index.
                 index = (self.tree[index] & HUFF8_LEAF_MASK) as usize;
             } else {
@@ -125,7 +125,7 @@ impl Huff16 {
     pub fn build(bs: &mut BitStream, alloc_size: u32) -> Result<Self> {
         let h;
 
-        if bs.read_1()? {
+        if bs.read_bit()? {
             // Build the two 8-bit sub-trees used for leaf values.
             let low8 = Huff8::build(bs)?;
             let hi8 = Huff8::build(bs)?;
@@ -133,8 +133,8 @@ impl Huff16 {
             // Read the 3-entry escape-code cache (lo byte, hi byte each).
             let mut cache = [0u16; 3];
             for entry in &mut cache {
-                let lo = bs.read_8()?;
-                let hi = bs.read_8()?;
+                let lo = bs.read_byte()?;
+                let hi = bs.read_byte()?;
                 *entry = u16::from(lo) | (u16::from(hi) << 8);
             }
 
@@ -159,7 +159,7 @@ impl Huff16 {
             }
 
             // Trees are terminated by a false bit.
-            if bs.read_1()? {
+            if bs.read_bit()? {
                 return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
             }
 
@@ -172,7 +172,7 @@ impl Huff16 {
             };
 
             // Trees are terminated by a false bit.
-            if bs.read_1()? {
+            if bs.read_bit()? {
                 return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
             }
 
@@ -192,7 +192,7 @@ impl Huff16 {
             return Err(SmkError::TreeBuildFailed("huff16 tree size exceeded"));
         }
 
-        if bs.read_1()? {
+        if bs.read_bit()? {
             // Branch: reserve slot, build left, fill jump, build right.
             let slot = self.tree.len();
             self.tree.push(0); // placeholder
@@ -235,7 +235,7 @@ impl Huff16 {
         let mut index = 0usize;
 
         while self.tree[index] & HUFF16_BRANCH != 0 {
-            if bs.read_1()? {
+            if bs.read_bit()? {
                 index = (self.tree[index] & HUFF16_LEAF_MASK) as usize;
             } else {
                 index += 1;

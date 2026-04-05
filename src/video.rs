@@ -143,9 +143,9 @@ impl Video {
 
             // SMK v4 extends type 1 (full block) with two sub-types.
             if block_type == 1 && self.version == b'4' {
-                if bs.read_1()? {
+                if bs.read_bit()? {
                     block_type = 4; // v4 double block
-                } else if bs.read_1()? {
+                } else if bs.read_bit()? {
                     block_type = 5; // v4 half block
                 }
             }

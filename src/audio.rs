@@ -57,17 +57,17 @@ impl AudioTrack {
         let mut bs = BitStream::new(&data[4..]);
 
         // Initial marker bit (must be set).
-        if !bs.read_1()? {
+        if !bs.read_bit()? {
             return Err(SmkError::InvalidData("DPCM: initial bit must be 1"));
         }
 
         // Verify stereo/mono and bitdepth flags.
-        let is_stereo = bs.read_1()?;
+        let is_stereo = bs.read_bit()?;
         if (is_stereo && self.channels != 2) || (!is_stereo && self.channels != 1) {
             log::warn!("audio mono/stereo mismatch in DPCM stream");
         }
 
-        let is_16bit = bs.read_1()?;
+        let is_16bit = bs.read_bit()?;
         if (is_16bit && self.bitdepth != 16) || (!is_16bit && self.bitdepth != 8) {
             log::warn!("audio 8/16-bit mismatch in DPCM stream");
         }
@@ -108,8 +108,8 @@ impl AudioTrack {
             // i.e. sample = (first_read << 8) | second_read
             if is_stereo {
                 // Right channel initial sample (stored first in bitstream).
-                let hi = bs.read_8()?;
-                let lo = bs.read_8()?;
+                let hi = bs.read_byte()?;
+                let lo = bs.read_byte()?;
                 write_i16(buf, 1, i16::from_le_bytes([lo, hi]));
                 j = 2;
                 k = 4;
@@ -119,8 +119,8 @@ impl AudioTrack {
             }
 
             // Left/mono initial sample.
-            let hi = bs.read_8()?;
-            let lo = bs.read_8()?;
+            let hi = bs.read_byte()?;
+            let lo = bs.read_byte()?;
             write_i16(buf, 0, i16::from_le_bytes([lo, hi]));
 
             // Decode loop.
@@ -152,7 +152,7 @@ impl AudioTrack {
 
             if is_stereo {
                 // Right channel initial value.
-                buf[1] = bs.read_8()?;
+                buf[1] = bs.read_byte()?;
                 j = 2;
                 k = 2;
             } else {
@@ -161,7 +161,7 @@ impl AudioTrack {
             }
 
             // Left/mono initial value.
-            buf[0] = bs.read_8()?;
+            buf[0] = bs.read_byte()?;
 
             while k < buf_size {
                 // Left/mono channel.
