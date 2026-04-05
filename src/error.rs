@@ -5,7 +5,6 @@ use std::io;
 pub enum SmkError {
     Io(io::Error),
     InvalidSignature,
-    InvalidVersion(u8),
     BitstreamExhausted,
     TreeBuildFailed(&'static str),
     InvalidData(&'static str),
@@ -16,7 +15,6 @@ impl fmt::Display for SmkError {
         match self {
             SmkError::Io(e) => write!(f, "I/O error: {e}"),
             SmkError::InvalidSignature => write!(f, "invalid SMK signature"),
-            SmkError::InvalidVersion(v) => write!(f, "invalid SMK version: {v}"),
             SmkError::BitstreamExhausted => write!(f, "bitstream exhausted"),
             SmkError::TreeBuildFailed(msg) => write!(f, "huffman tree build failed: {msg}"),
             SmkError::InvalidData(msg) => write!(f, "invalid data: {msg}"),

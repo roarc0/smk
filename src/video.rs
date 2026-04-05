@@ -16,7 +16,6 @@ pub(crate) struct Video {
     pub h: u32,
     pub y_scale_mode: YScaleMode,
     pub version: u8, // b'2' or b'4'
-    pub _tree_size: [u32; 4],
     pub tree: [Huff16; 4],
     pub palette: [[u8; 3]; 256],
     pub frame: Vec<u8>,
@@ -144,9 +143,9 @@ impl Video {
 
             // SMK v4 extends type 1 (full block) with two sub-types.
             if block_type == 1 && self.version == b'4' {
-                if bs.read_1()? == 1 {
+                if bs.read_1()? {
                     block_type = 4; // v4 double block
-                } else if bs.read_1()? == 1 {
+                } else if bs.read_1()? {
                     block_type = 5; // v4 half block
                 }
             }
@@ -275,7 +274,6 @@ mod tests {
             h: 8,
             y_scale_mode: YScaleMode::None,
             version: b'4',
-            _tree_size: [0; 4],
             tree: Default::default(),
             palette: [[0; 3]; 256],
             frame: vec![0; 64],
@@ -350,7 +348,7 @@ mod tests {
     fn palette_value_exceeds_6bit() {
         let mut v = make_video();
         // 0x40 is > 0x3F, should error
-        let data = [0x40, 0x00, 0x00];
+        let _data = [0x40, 0x00, 0x00];
         // But 0x40 is actually the copy-block prefix, not a direct-set.
         // For a direct-set error, the first byte must be < 0x40 (the flag byte)
         // and one of the color bytes must be > 0x3F.

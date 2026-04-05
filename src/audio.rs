@@ -56,22 +56,20 @@ impl AudioTrack {
 
         let mut bs = BitStream::new(&data[4..]);
 
-        // Initial marker bit (must be 1).
-        if bs.read_1()? != 1 {
+        // Initial marker bit (must be set).
+        if !bs.read_1()? {
             return Err(SmkError::InvalidData("DPCM: initial bit must be 1"));
         }
 
         // Verify stereo/mono and bitdepth flags.
-        let stereo_bit = bs.read_1()?;
-        let is_stereo = stereo_bit == 1;
+        let is_stereo = bs.read_1()?;
         if (is_stereo && self.channels != 2) || (!is_stereo && self.channels != 1) {
-            eprintln!("smk: warning: audio mono/stereo mismatch");
+            log::warn!("audio mono/stereo mismatch in DPCM stream");
         }
 
-        let depth_bit = bs.read_1()?;
-        let is_16bit = depth_bit == 1;
+        let is_16bit = bs.read_1()?;
         if (is_16bit && self.bitdepth != 16) || (!is_16bit && self.bitdepth != 8) {
-            eprintln!("smk: warning: audio 8/16-bit mismatch");
+            log::warn!("audio 8/16-bit mismatch in DPCM stream");
         }
 
         // Build Huffman trees.

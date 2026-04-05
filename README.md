@@ -19,8 +19,8 @@ use smk::{Smk, SmkFrame};
 
 let mut s = Smk::open_file("video.smk", true)?;
 
-let (_, frame_count, usf) = s.info_all();
-let (w, h, yscale) = s.info_video();
+let info = s.info_all();
+let video = s.info_video();
 
 s.enable_all(0xFF); // enable video + all audio tracks
 

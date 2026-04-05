@@ -22,23 +22,21 @@ pub(crate) struct Huff8 {
 impl Huff8 {
     /// Build a Huff8 tree from the bitstream.
     ///
-    /// Format: a leading `1` bit means a tree follows, `0` means an empty tree
-    /// (single zero-value leaf). The tree data is terminated by a `0` bit.
+    /// Format: a leading `true` bit means a tree follows, `false` means an
+    /// empty tree (single zero-value leaf). The tree data is terminated by a
+    /// `false` bit.
     pub fn build(bs: &mut BitStream) -> Result<Self> {
-        let bit = bs.read_1()?;
-
         let mut h = Huff8 { tree: Vec::new() };
 
-        if bit == 1 {
+        if bs.read_1()? {
             h.build_rec(bs)?;
         } else {
             // No tree present — single leaf with value 0.
             h.tree.push(0);
         }
 
-        // Trees are terminated by a 0 bit.
-        let end = bs.read_1()?;
-        if end != 0 {
+        // Trees are terminated by a false bit.
+        if bs.read_1()? {
             return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
         }
 
@@ -51,9 +49,7 @@ impl Huff8 {
             return Err(SmkError::TreeBuildFailed("huff8 tree size exceeded"));
         }
 
-        let bit = bs.read_1()?;
-
-        if bit == 1 {
+        if bs.read_1()? {
             // Branch node: reserve a slot, build left subtree, record right
             // child index, then build right subtree.
             let slot = self.tree.len();
@@ -80,8 +76,7 @@ impl Huff8 {
         let mut index = 0usize;
 
         while self.tree[index] & HUFF8_BRANCH != 0 {
-            let bit = bs.read_1()?;
-            if bit == 1 {
+            if bs.read_1()? {
                 // Right branch: jump to the stored index.
                 index = (self.tree[index] & HUFF8_LEAF_MASK) as usize;
             } else {
@@ -128,11 +123,9 @@ impl Huff16 {
     /// `alloc_size` is the byte-size field from the SMK header for this tree.
     /// The C code uses `(alloc_size - 12) / 4` as the expected entry count.
     pub fn build(bs: &mut BitStream, alloc_size: u32) -> Result<Self> {
-        let bit = bs.read_1()?;
+        let h;
 
-        let mut h;
-
-        if bit == 1 {
+        if bs.read_1()? {
             // Build the two 8-bit sub-trees used for leaf values.
             let low8 = Huff8::build(bs)?;
             let hi8 = Huff8::build(bs)?;
@@ -156,6 +149,7 @@ impl Huff16 {
                 cache,
             };
 
+            let mut h = h;
             h.build_rec(bs, &low8, &hi8, limit)?;
 
             if h.tree.len() != limit {
@@ -163,21 +157,27 @@ impl Huff16 {
                     "huff16 tree size does not match expected",
                 ));
             }
+
+            // Trees are terminated by a false bit.
+            if bs.read_1()? {
+                return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
+            }
+
+            Ok(h)
         } else {
             // No tree — single zero-value leaf.
             h = Huff16 {
                 tree: vec![0],
                 cache: [0; 3],
             };
-        }
 
-        // Trees are terminated by a 0 bit.
-        let end = bs.read_1()?;
-        if end != 0 {
-            return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
-        }
+            // Trees are terminated by a false bit.
+            if bs.read_1()? {
+                return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
+            }
 
-        Ok(h)
+            Ok(h)
+        }
     }
 
     /// Recursively build the 16-bit tree.
@@ -192,9 +192,7 @@ impl Huff16 {
             return Err(SmkError::TreeBuildFailed("huff16 tree size exceeded"));
         }
 
-        let bit = bs.read_1()?;
-
-        if bit == 1 {
+        if bs.read_1()? {
             // Branch: reserve slot, build left, fill jump, build right.
             let slot = self.tree.len();
             self.tree.push(0); // placeholder
@@ -237,8 +235,7 @@ impl Huff16 {
         let mut index = 0usize;
 
         while self.tree[index] & HUFF16_BRANCH != 0 {
-            let bit = bs.read_1()?;
-            if bit == 1 {
+            if bs.read_1()? {
                 index = (self.tree[index] & HUFF16_LEAF_MASK) as usize;
             } else {
                 index += 1;
@@ -299,32 +296,11 @@ mod tests {
         // 8-bit value, bit=0 (terminator).
         //
         // Bits (LSB first): 1, 0, [8 bits of value 0x42], 0
-        // = 1, 0, 0,1,0,0,0,0,1,0, 0
-        // Byte 0 bits: 1,0, 0,1,0,0,0,0  = 0b00010001 = 0x11  (wait, wrong...)
-        //
-        // Let me lay out carefully. We need these bits in order:
-        //   bit0=1  (tree present)
-        //   bit1=0  (leaf)
-        //   bit2..9 = 0x42 = 0b01000010 (LSB first: 0,1,0,0,0,0,1,0)
+        //   bit0=1, bit1=0, bit2..9 = 0x42 LSB first: 0,1,0,0,0,0,1,0
         //   bit10=0 (terminator)
         //
-        // Byte 0 (bits 0-7):  1,0, 0,1,0,0,0,0 = 0b00010001 = 0b00_0100_01 = 0x09
-        //   bit0=1, bit1=0, bit2=0, bit3=1, bit4=0, bit5=0, bit6=0, bit7=0
-        //   = 0b0000_1001 = 0x09
-        // Byte 1 (bits 8-10): 1,0, 0, ...
-        //   bit8=1, bit9=0, bit10=0
-        //   = 0b0000_0001 = 0x01
-        //   (wait: bit8,9 are the remaining value bits, bit10 is terminator)
-        //   0x42 = 0b01000010, LSB first bits: 0,1,0,0,0,0,1,0
-        //   bits 2..9 = 0,1,0,0,0,0,1,0
-        //   So byte 0 = bits 0..7:
-        //     bit0=1, bit1=0, bit2=0, bit3=1, bit4=0, bit5=0, bit6=0, bit7=0
-        //     = 0x09 wait no.
-        //     binary: bit7 bit6 bit5 bit4 bit3 bit2 bit1 bit0
-        //     = 0, 0, 0, 0, 1, 0, 0, 1 = 0x09
-        //   byte 1 = bits 8..15:
-        //     bit8=1, bit9=0, bit10=0, rest=0
-        //     = 0, 0, 0, 0, 0, 0, 0, 1 = 0x01
+        // Byte 0 (bits 0-7): 1,0,0,1,0,0,0,0 = 0x09
+        // Byte 1 (bits 8-10): 1,0,0 = 0x01
         let data = [0x09, 0x01];
         let h = build_huff8(&data).unwrap();
         assert_eq!(h.tree.len(), 1);
@@ -344,24 +320,6 @@ mod tests {
         //   0       (right leaf)
         //   [0xBB = 0b10111011, LSB first: 1,1,0,1,1,1,0,1]
         //   0       (terminator)
-        //
-        // Bit sequence: 1,1,0, 0,1,0,1,0,1,0,1, 0, 1,1,0,1,1,1,0,1, 0
-        //  bits 0-7:  1,1,0,0,1,0,1,0 = 0x53
-        //  bits 8-15: 1,0,1,0,1,1,0,1 = 0xB5
-        //  bits 16-19: 1,1,0,0 = 0x03  (wait, let me recount)
-        //
-        // bit0=1, bit1=1, bit2=0,
-        // bit3=0, bit4=1, bit5=0, bit6=1, bit7=0 (first 5 of 0xAA value)
-        // byte0 = 0b0_101_0011 no...
-        // byte0: bit7..bit0 = bit7,bit6,bit5,bit4,bit3,bit2,bit1,bit0
-        //   = 0,1,0,1,0,0,1,1 = 0x53
-        // bit8=1, bit9=0, bit10=1 (last 3 of 0xAA)
-        // bit11=0 (right leaf marker)
-        // bit12=1, bit13=1, bit14=0, bit15=1 (first 4 of 0xBB)
-        // byte1: bit15..bit8 = 1,0,1,1,0,1,0,1 = 0xB5
-        // bit16=1, bit17=1, bit18=0, bit19=1 (last 4 of 0xBB)
-        // bit20=0 (terminator)
-        // byte2: bit23..bit16 = 0,0,0,0,1,0,1,1 = 0x0B
         let data = [0x53, 0xB5, 0x0B];
         let h = build_huff8(&data).unwrap();
         assert_eq!(h.tree.len(), 3); // 1 branch + 2 leaves
@@ -401,67 +359,6 @@ mod tests {
 
     #[test]
     fn huff16_single_leaf() {
-        // We need:
-        //   bit=1 (tree present)
-        //   -- low8 tree: empty (bit=0, bit=0) => always returns 0
-        //   -- hi8 tree: empty (bit=0, bit=0) => always returns 0
-        //   -- cache[0] lo=0x01, hi=0x00 => 0x0001
-        //   -- cache[1] lo=0x02, hi=0x00 => 0x0002
-        //   -- cache[2] lo=0x03, hi=0x00 => 0x0003
-        //   -- recursive tree: bit=0 (leaf), then lookups on low8/hi8
-        //      low8 lookup needs bits to traverse (empty tree = single leaf, no bits needed)
-        //      hi8 lookup same => value = 0x0000
-        //      0x0000 != any cache entry, so stored as literal 0
-        //   bit=0 (terminator)
-        //
-        // alloc_size for 1 entry: 12 + 1*4 = 16
-        //
-        // Let's build the bitstream manually:
-        // bit0 = 1 (tree present)
-        // bits 1-2 = 0,0 (low8: no tree + terminator)
-        // bits 3-4 = 0,0 (hi8: no tree + terminator)
-        // bits 5-12 = cache[0] lo = 0x01 = LSB first: 1,0,0,0,0,0,0,0
-        // bits 13-20 = cache[0] hi = 0x00 = 0,0,0,0,0,0,0,0
-        // bits 21-28 = cache[1] lo = 0x02 = 0,1,0,0,0,0,0,0
-        // bits 29-36 = cache[1] hi = 0x00 = 0,0,0,0,0,0,0,0
-        // bits 37-44 = cache[2] lo = 0x03 = 1,1,0,0,0,0,0,0
-        // bits 45-52 = cache[2] hi = 0x00 = 0,0,0,0,0,0,0,0
-        // bit 53 = 0 (leaf node in huff16 tree)
-        // (low8 lookup: single leaf returns 0 immediately, no bits consumed)
-        // (hi8 lookup: single leaf returns 0 immediately, no bits consumed)
-        // bit 54 = 0 (terminator)
-        //
-        // byte 0 (bits 0-7): 1,0,0,0,0,1,0,0 => wait let me be more careful
-        // bit0=1, bit1=0, bit2=0, bit3=0, bit4=0,
-        // bit5=1 (cache[0] lo bit0), bit6=0, bit7=0
-        // = 0b0010_0001 = 0x21
-        //
-        // bit8=0, bit9=0, bit10=0, bit11=0, bit12=0,
-        // bit13=0 (cache[0] hi bit0), bit14=0, bit15=0
-        // = 0x00
-        //
-        // bit16=0, bit17=0, bit18=0, bit19=0, bit20=0,
-        // bit21=0 (cache[1] lo bit0), bit22=1, bit23=0
-        // = 0b0100_0000 = 0x40
-        //
-        // bit24=0, bit25=0, bit26=0, bit27=0, bit28=0,
-        // bit29=0 (cache[1] hi bit0), bit30=0, bit31=0
-        // = 0x00
-        //
-        // bit32=0, bit33=0, bit34=0, bit35=0, bit36=0,
-        // bit37=1 (cache[2] lo bit0), bit38=1, bit39=0
-        // = 0b0110_0000 = 0x60
-        //
-        // bit40=0, bit41=0, bit42=0, bit43=0, bit44=0,
-        // bit45=0 (cache[2] hi bit0), bit46=0, bit47=0
-        // = 0x00
-        //
-        // bit48=0, bit49=0, bit50=0, bit51=0, bit52=0,
-        // bit53=0 (leaf), bit54=0 (terminator), bit55=0
-        // = 0x00
-        //
-        // Hmm, this is getting complex. Let me use a helper approach instead.
-
         // Build bitstream programmatically
         let mut bits: Vec<u8> = Vec::new();
 

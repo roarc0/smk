@@ -27,14 +27,17 @@ fn main() {
     let data = fs::read(input).unwrap();
     let mut s = Smk::open_memory(&data).unwrap();
 
-    let (_, frame_count, usf) = s.info_all();
-    let (w, h, yscale) = s.info_video();
+    let smk_info = s.info_all();
+    let video = s.info_video();
     let info = s.info_audio();
-    let fps = 1_000_000.0 / usf;
+    let fps = 1_000_000.0 / smk_info.microseconds_per_frame;
+    let w = video.width;
+    let h = video.height;
+    let frame_count = smk_info.frame_count;
 
     println!("File: {input}");
     println!("Frames: {frame_count}, {fps:.2} fps");
-    println!("Video: {w}x{h}, yscale: {yscale:?}");
+    println!("Video: {w}x{h}, yscale: {:?}", video.y_scale);
 
     for i in 0..7 {
         if info.track_mask & (1 << i) != 0 {
@@ -70,9 +73,9 @@ fn main() {
         // Accumulate audio.
         for track in 0u8..7 {
             if info.track_mask & (1 << track) != 0 {
-                let size = s.audio_size(track) as usize;
+                let size = s.audio_size(track).unwrap_or(0) as usize;
                 if size > 0 {
-                    let adata = s.audio_data(track);
+                    let adata = s.audio_data(track).unwrap();
                     audio_bufs[track as usize].extend_from_slice(&adata[..size]);
                 }
             }

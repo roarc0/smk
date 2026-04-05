@@ -16,13 +16,13 @@ impl<'a> BitStream<'a> {
         }
     }
 
-    /// Read a single bit (0 or 1).
-    pub fn read_1(&mut self) -> Result<u8> {
+    /// Read a single bit.
+    pub fn read_1(&mut self) -> Result<bool> {
         if self.pos >= self.buffer.len() {
             return Err(SmkError::BitstreamExhausted);
         }
 
-        let ret = (self.buffer[self.pos] >> self.bit_num) & 1;
+        let ret = (self.buffer[self.pos] >> self.bit_num) & 1 != 0;
 
         if self.bit_num >= 7 {
             self.pos += 1;
@@ -62,14 +62,14 @@ mod tests {
         let data = [0xB2];
         let mut bs = BitStream::new(&data);
         // LSB first: bits are 0,1,0,0,1,1,0,1
-        assert_eq!(bs.read_1().unwrap(), 0);
-        assert_eq!(bs.read_1().unwrap(), 1);
-        assert_eq!(bs.read_1().unwrap(), 0);
-        assert_eq!(bs.read_1().unwrap(), 0);
-        assert_eq!(bs.read_1().unwrap(), 1);
-        assert_eq!(bs.read_1().unwrap(), 1);
-        assert_eq!(bs.read_1().unwrap(), 0);
-        assert_eq!(bs.read_1().unwrap(), 1);
+        assert!(!bs.read_1().unwrap());
+        assert!(bs.read_1().unwrap());
+        assert!(!bs.read_1().unwrap());
+        assert!(!bs.read_1().unwrap());
+        assert!(bs.read_1().unwrap());
+        assert!(bs.read_1().unwrap());
+        assert!(!bs.read_1().unwrap());
+        assert!(bs.read_1().unwrap());
         assert!(bs.read_1().is_err());
     }
 
@@ -87,7 +87,7 @@ mod tests {
         let data = [0xFF, 0x00, 0xFF];
         let mut bs = BitStream::new(&data);
         // Read 1 bit first to misalign
-        assert_eq!(bs.read_1().unwrap(), 1);
+        assert!(bs.read_1().unwrap());
         // Now read_8 should combine across byte boundary
         let val = bs.read_8().unwrap();
         // bits 1..8 of byte 0 (all 1s = 0x7F) | bits 0..0 of byte 1 (0) << 7

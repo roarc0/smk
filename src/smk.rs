@@ -1,5 +1,6 @@
+use std::borrow::Cow;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::audio::{AudioCompress, AudioInfo, AudioTrack};
@@ -16,6 +17,22 @@ pub enum SmkFrame {
     Last,
 }
 
+/// General information about an SMK file.
+#[derive(Debug, Clone)]
+pub struct SmkInfo {
+    pub current_frame: u32,
+    pub frame_count: u32,
+    pub microseconds_per_frame: f64,
+}
+
+/// Video dimensions and scaling mode.
+#[derive(Debug, Clone)]
+pub struct VideoInfo {
+    pub width: u32,
+    pub height: u32,
+    pub y_scale: YScaleMode,
+}
+
 // --- Source: file-backed or memory-backed ---
 
 pub(crate) enum Source {
@@ -28,77 +45,18 @@ pub(crate) enum Source {
     },
 }
 
-// --- Helper: read little-endian u32 ---
+// --- Helper: read little-endian values ---
 
-fn read_le_u32(r: &mut dyn SmkRead) -> Result<u32> {
+fn read_le_u32(r: &mut impl Read) -> Result<u32> {
     let mut buf = [0u8; 4];
     r.read_exact(&mut buf)?;
     Ok(u32::from_le_bytes(buf))
 }
 
-fn read_le_u8(r: &mut dyn SmkRead) -> Result<u8> {
+fn read_le_u8(r: &mut impl Read) -> Result<u8> {
     let mut buf = [0u8; 1];
     r.read_exact(&mut buf)?;
     Ok(buf[0])
-}
-
-// --- Reader abstraction ---
-
-pub(crate) trait SmkRead {
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()>;
-    /// Current stream position (for disk-mode offset tracking).
-    fn stream_position(&mut self) -> Result<u64>;
-    /// Seek forward by `n` bytes (for disk-mode frame skipping).
-    fn seek_forward(&mut self, n: u64) -> Result<()>;
-}
-
-impl SmkRead for BufReader<File> {
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
-        Read::read_exact(self, buf)?;
-        Ok(())
-    }
-    fn stream_position(&mut self) -> Result<u64> {
-        Ok(Seek::stream_position(self)?)
-    }
-    fn seek_forward(&mut self, n: u64) -> Result<()> {
-        Seek::seek(self, SeekFrom::Current(n as i64))?;
-        Ok(())
-    }
-}
-
-/// Wrapper to give a `&[u8]` slice a tracked position for SmkRead.
-pub(crate) struct SliceReader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> SliceReader<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        SliceReader { data, pos: 0 }
-    }
-}
-
-impl SmkRead for SliceReader<'_> {
-    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
-        let end = self.pos + buf.len();
-        if end > self.data.len() {
-            return Err(SmkError::InvalidData("short read"));
-        }
-        buf.copy_from_slice(&self.data[self.pos..end]);
-        self.pos = end;
-        Ok(())
-    }
-    fn stream_position(&mut self) -> Result<u64> {
-        Ok(self.pos as u64)
-    }
-    fn seek_forward(&mut self, n: u64) -> Result<()> {
-        let new = self.pos + n as usize;
-        if new > self.data.len() {
-            return Err(SmkError::InvalidData("seek past end"));
-        }
-        self.pos = new;
-        Ok(())
-    }
 }
 
 // --- Main Smacker handle ---
@@ -128,7 +86,7 @@ impl Smk {
     /// If `memory_mode` is true, all frame data is loaded into memory and the
     /// file handle is closed. Otherwise the file is kept open for streaming.
     pub fn open_file(path: impl AsRef<Path>, memory_mode: bool) -> Result<Smk> {
-        let file = File::open(path.as_ref()).map_err(SmkError::Io)?;
+        let file = File::open(path.as_ref())?;
         let mut reader = BufReader::new(file);
 
         let mut s = Self::open_generic(&mut reader, memory_mode)?;
@@ -147,16 +105,24 @@ impl Smk {
 
     /// Open an SMK from an in-memory buffer.
     pub fn open_memory(data: &[u8]) -> Result<Smk> {
-        let mut reader = SliceReader::new(data);
-        Self::open_generic(&mut reader, true)
+        let mut cursor = Cursor::new(data);
+        Self::open_generic(&mut cursor, true)
     }
 
-    pub fn info_all(&self) -> (u32, u32, f64) {
-        (self.cur_frame, self.frame_count, self.usf)
+    pub fn info_all(&self) -> SmkInfo {
+        SmkInfo {
+            current_frame: self.cur_frame,
+            frame_count: self.frame_count,
+            microseconds_per_frame: self.usf,
+        }
     }
 
-    pub fn info_video(&self) -> (u32, u32, YScaleMode) {
-        (self.video.w, self.video.h, self.video.y_scale_mode)
+    pub fn info_video(&self) -> VideoInfo {
+        VideoInfo {
+            width: self.video.w,
+            height: self.video.h,
+            y_scale: self.video.y_scale_mode,
+        }
     }
 
     pub fn info_audio(&self) -> AudioInfo {
@@ -202,14 +168,12 @@ impl Smk {
         &self.video.frame
     }
 
-    pub fn audio_data(&self, track: u8) -> &[u8] {
-        assert!((track as usize) < 7, "audio track index must be 0..6");
-        &self.audio[track as usize].buffer
+    pub fn audio_data(&self, track: u8) -> Option<&[u8]> {
+        self.audio.get(track as usize).map(|t| t.buffer.as_slice())
     }
 
-    pub fn audio_size(&self, track: u8) -> u32 {
-        assert!((track as usize) < 7, "audio track index must be 0..6");
-        self.audio[track as usize].buffer_size
+    pub fn audio_size(&self, track: u8) -> Option<u32> {
+        self.audio.get(track as usize).map(|t| t.buffer_size)
     }
 
     /// Rewind to the first frame and decode it.
@@ -265,7 +229,7 @@ impl Smk {
     }
 
     /// Core open logic shared by file and memory paths.
-    pub(crate) fn open_generic(r: &mut dyn SmkRead, memory_mode: bool) -> Result<Smk> {
+    fn open_generic(r: &mut (impl Read + Seek), memory_mode: bool) -> Result<Smk> {
         // --- Signature: "SMK" ---
         let mut sig = [0u8; 3];
         r.read_exact(&mut sig)?;
@@ -276,8 +240,8 @@ impl Smk {
         // --- Version: '2' or '4' ---
         let mut version = read_le_u8(r)?;
         if version != b'2' && version != b'4' {
-            eprintln!(
-                "smk: warning: invalid SMK version '{}', guessing",
+            log::warn!(
+                "invalid SMK version '{}', guessing based on value",
                 version as char
             );
             version = if version < b'4' { b'2' } else { b'4' };
@@ -337,10 +301,7 @@ impl Smk {
                 track.buffer = vec![0u8; track.max_buffer as usize];
 
                 track.compress = if temp_u & 0x0C00_0000 != 0 {
-                    eprintln!(
-                        "smk: warning: audio track {} uses Bink compression (unsupported)",
-                        i
-                    );
+                    log::warn!("audio track {} uses Bink compression (unsupported)", i);
                     AudioCompress::Bink
                 } else if temp_u & 0x8000_0000 != 0 {
                     AudioCompress::Dpcm
@@ -382,10 +343,7 @@ impl Smk {
         let mut bs = BitStream::new(&hufftree_chunk);
         let mut trees: [Huff16; 4] = Default::default();
         for (i, tree) in trees.iter_mut().enumerate() {
-            *tree = Huff16::build(&mut bs, tree_size[i]).map_err(|e| {
-                eprintln!("smk: error building huff16 tree {}: {}", i, e);
-                e
-            })?;
+            *tree = Huff16::build(&mut bs, tree_size[i])?;
         }
 
         // --- Allocate video frame buffer ---
@@ -407,7 +365,7 @@ impl Smk {
                 .zip(chunk_size.iter().take(total_frames as usize))
             {
                 *offset = r.stream_position()?;
-                r.seek_forward(size as u64)?;
+                r.seek(SeekFrom::Current(size as i64))?;
             }
             Source::Disk {
                 // Placeholder — caller fills in the real reader after return.
@@ -422,7 +380,6 @@ impl Smk {
             h,
             y_scale_mode,
             version,
-            _tree_size: tree_size,
             tree: trees,
             palette: [[0u8; 3]; 256],
             frame: frame_buf,
@@ -452,9 +409,8 @@ impl Smk {
         }
 
         // Get the frame data — borrow from memory or read from disk.
-        let owned_buf: Vec<u8>;
-        let buf: &[u8] = match &mut self.source {
-            Source::Memory { chunk_data } => &chunk_data[idx],
+        let buf: Cow<'_, [u8]> = match &mut self.source {
+            Source::Memory { chunk_data } => Cow::Borrowed(&chunk_data[idx]),
             Source::Disk {
                 reader,
                 chunk_offset,
@@ -463,13 +419,10 @@ impl Smk {
                     .as_mut()
                     .ok_or(SmkError::InvalidData("no file reader"))?;
                 let offset = chunk_offset[idx];
-                r.seek(SeekFrom::Start(offset)).map_err(SmkError::Io)?;
-                owned_buf = {
-                    let mut data = vec![0u8; chunk_sz];
-                    Read::read_exact(r, &mut data)?;
-                    data
-                };
-                &owned_buf
+                r.seek(SeekFrom::Start(offset))?;
+                let mut data = vec![0u8; chunk_sz];
+                r.read_exact(&mut data)?;
+                Cow::Owned(data)
             }
         };
 
@@ -545,24 +498,33 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let s = Smk::open_memory(&data).unwrap();
 
-        let (cur, count, usf) = s.info_all();
-        eprintln!("frames: {count}, cur: {cur}, usf: {usf}");
-        assert!(count > 0);
-        assert!(usf > 0.0);
+        let info = s.info_all();
+        eprintln!(
+            "frames: {}, cur: {}, usf: {}",
+            info.frame_count, info.current_frame, info.microseconds_per_frame
+        );
+        assert!(info.frame_count > 0);
+        assert!(info.microseconds_per_frame > 0.0);
 
-        let (w, h, yscale) = s.info_video();
-        eprintln!("video: {w}x{h}, yscale: {yscale:?}");
-        assert!(w > 0);
-        assert!(h > 0);
-        assert_eq!(s.video.frame.len(), (w as usize) * (h as usize));
+        let video = s.info_video();
+        eprintln!(
+            "video: {}x{}, yscale: {:?}",
+            video.width, video.height, video.y_scale
+        );
+        assert!(video.width > 0);
+        assert!(video.height > 0);
+        assert_eq!(
+            s.video.frame.len(),
+            (video.width as usize) * (video.height as usize)
+        );
 
-        let info = s.info_audio();
-        eprintln!("audio track_mask: 0x{:02x}", info.track_mask);
+        let audio = s.info_audio();
+        eprintln!("audio track_mask: 0x{:02x}", audio.track_mask);
         for i in 0..7 {
-            if info.track_mask & (1 << i) != 0 {
+            if audio.track_mask & (1 << i) != 0 {
                 eprintln!(
                     "  track {i}: {}ch {}bit {}Hz",
-                    info.channels[i], info.bitdepth[i], info.rate[i]
+                    audio.channels[i], audio.bitdepth[i], audio.rate[i]
                 );
             }
         }
@@ -578,8 +540,8 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let mut s = Smk::open_memory(&data).unwrap();
 
-        let (_, count, _) = s.info_all();
-        eprintln!("decoding {} frames...", count);
+        let info = s.info_all();
+        eprintln!("decoding {} frames...", info.frame_count);
 
         let mut status = s.first_frame().unwrap();
         let mut decoded = 1u32;
@@ -599,7 +561,7 @@ mod tests {
         }
 
         eprintln!("decoded {decoded} frames, total non-zero pixels: {total_nonzero}");
-        assert_eq!(decoded, count);
+        assert_eq!(decoded, info.frame_count);
         // The video should have substantial content across all frames.
         assert!(total_nonzero > 0, "all frames were blank");
     }
@@ -640,15 +602,15 @@ mod tests {
     fn info_accessors() {
         let smk_data = build_minimal_smk(5, 320, 200, false);
         let s = Smk::open_memory(&smk_data).unwrap();
-        let (cur, count, usf) = s.info_all();
-        assert_eq!(cur, 0);
-        assert_eq!(count, 5);
-        assert!(usf > 0.0);
+        let info = s.info_all();
+        assert_eq!(info.current_frame, 0);
+        assert_eq!(info.frame_count, 5);
+        assert!(info.microseconds_per_frame > 0.0);
 
-        let (w, h, yscale) = s.info_video();
-        assert_eq!(w, 320);
-        assert_eq!(h, 200);
-        assert_eq!(yscale, YScaleMode::None);
+        let video = s.info_video();
+        assert_eq!(video.width, 320);
+        assert_eq!(video.height, 200);
+        assert_eq!(video.y_scale, YScaleMode::None);
     }
 
     #[test]
@@ -679,7 +641,7 @@ mod tests {
         assert_eq!(s.first_frame().unwrap(), SmkFrame::More);
         assert_eq!(s.next_frame().unwrap(), SmkFrame::More);
         assert_eq!(s.next_frame().unwrap(), SmkFrame::Last);
-        // Now next() should loop back to frame 1.
+        // Now next_frame() should loop back to frame 1.
         assert_eq!(s.next_frame().unwrap(), SmkFrame::More);
         assert_eq!(s.cur_frame, 1);
     }

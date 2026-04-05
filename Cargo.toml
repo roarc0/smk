@@ -14,6 +14,9 @@ keywords = ["smacker", "video", "decoder", "multimedia", "smk"]
 categories = ["multimedia::video", "parser-implementations"]
 exclude = ["testdata/", "examples/"]
 
+[dependencies]
+log = "0.4"
+
 [[example]]
 name = "extract"
 path = "examples/extract.rs"
