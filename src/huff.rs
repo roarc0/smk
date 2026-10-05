@@ -166,15 +166,11 @@ impl Huff16 {
             Ok(h)
         } else {
             // No tree — single zero-value leaf.
+            // Unlike a present tree, an absent one has no terminating bit.
             h = Huff16 {
                 tree: vec![0],
                 cache: [0; 3],
             };
-
-            // Trees are terminated by a false bit.
-            if bs.read_bit()? {
-                return Err(SmkError::TreeBuildFailed("expected trailing 0 bit"));
-            }
 
             Ok(h)
         }
@@ -345,7 +341,7 @@ mod tests {
 
     #[test]
     fn huff16_empty_tree() {
-        // bit=0 (no tree), bit=0 (terminator) => 0x00
+        // bit=0 (no tree) => 0x00
         let data = [0x00];
         let mut bs = BitStream::new(&data);
         let mut h = Huff16::build(&mut bs, 16).unwrap();
@@ -355,6 +351,15 @@ mod tests {
         // Lookup always returns 0.
         let mut lbs = BitStream::new(&[0x00]);
         assert_eq!(h.lookup(&mut lbs).unwrap(), 0);
+    }
+
+    #[test]
+    fn huff16_empty_tree_reads_one_bit() {
+        // bit=0 (no tree), then bit=1 (the next tree's "present" bit) => 0x02
+        let data = [0x02];
+        let mut bs = BitStream::new(&data);
+        Huff16::build(&mut bs, 12).unwrap();
+        assert!(bs.read_bit().unwrap());
     }
 
     #[test]
@@ -469,7 +474,7 @@ mod tests {
     #[test]
     fn huff16_mru_cache_update() {
         // Build an empty huff16 tree (single leaf = 0).
-        let data = [0x00]; // bit=0 (no tree), bit=0 (term)
+        let data = [0x00]; // bit=0 (no tree)
         let mut bs = BitStream::new(&data);
         let mut h = Huff16::build(&mut bs, 16).unwrap();
 
